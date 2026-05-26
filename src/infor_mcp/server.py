@@ -1,125 +1,102 @@
 """
-Infor CloudSuite MCP Server
+Infor LN MCP Server
 
-The first MCP server for Infor CloudSuite — an AI-powered orchestration layer
-that gives LLMs (Claude, GPT, etc.) structured access to Landmark business
-class data through the ION API Gateway.
+MCP server for Infor LN — an AI-powered orchestration layer that gives LLMs
+structured access to LN c4ws SOAP data through the ION API Gateway.
 
-Phase 1: Read-only query tools for searching, listing, and analyzing
-CloudSuite data via natural language.
+Phase 1: Read-only query tools for searching and browsing LN data.
 
 Usage:
-    # Claude Desktop (stdio transport)
     infor-mcp
-
-    # Development / testing with MCP Inspector
     mcp dev src/infor_mcp/server.py
-
-    # Remote HTTP/SSE (for Claude.ai web connector)
     uvicorn infor_mcp.server:app --host 0.0.0.0 --port 8080
 """
 
 import os
-import sys
 import logging
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
-from infor_mcp.auth import IONAuthManager, IONAuthError
-from infor_mcp.client import IONClient
+from infor_mcp.auth import IONAuthManager
+from infor_mcp.client import LNSoapClient
 from infor_mcp.tools.query import register_query_tools
-from infor_mcp.tools.analysis import register_analysis_tools
 from infor_mcp.resources.reference import register_resources
 from infor_mcp.prompts.workflows import register_prompts
 
-# Load environment variables
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("infor_mcp")
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-# Path to .ionapi credentials file
 IONAPI_PATH = os.getenv(
     "IONAPI_PATH",
     str(Path(__file__).parent.parent.parent / "config" / ".ionapi"),
 )
 
-# Landmark data area (fsm, hcm, etc.)
-DATA_AREA = os.getenv("INFOR_DATA_AREA", "fsm")
+INFOR_LN_COMPANY = os.getenv("INFOR_LN_COMPANY", "100")
+INFOR_ION_TENANT_ID = os.getenv("INFOR_ION_TENANT_ID") or None
+INFOR_LN_LANGUAGE = os.getenv("INFOR_LN_LANGUAGE") or None
 
-# Server metadata
-SERVER_NAME = "Infor CloudSuite"
-SERVER_VERSION = "0.1.0"
+SERVER_NAME = "Infor LN"
+SERVER_VERSION = "0.2.0"
 
-
-# ---------------------------------------------------------------------------
-# Server initialization
-# ---------------------------------------------------------------------------
 
 def create_server() -> FastMCP:
-    """
-    Create and configure the MCP server with all tools, resources, and prompts.
-
-    The server initializes lazily — OAuth authentication happens on the first
-    tool call, not at startup. This means the server starts fast and fails
-    gracefully if credentials are missing.
-    """
+    """Create and configure the MCP server with tools, resources, and prompts."""
     mcp = FastMCP(
         SERVER_NAME,
         instructions=(
-            "You are connected to an Infor CloudSuite ERP system through the ION API Gateway. "
-            "You can query any Landmark business class to retrieve financial, purchasing, HR, "
-            "and operational data. Use the available tools to search records, find specific "
-            "documents, and analyze data across the system.\n\n"
+            "You are connected to an Infor LN ERP system through the ION API Gateway. "
+            "You can query LN c4ws SOAP services to retrieve purchasing, sales, inventory, "
+            "and master data.\n\n"
             "Key tips:\n"
-            "- Use list_business_classes to discover available data entities\n"
-            "- Use list_business_class_details to understand a class's fields before querying\n"
-            "- Use query_business_class for searching and listing records\n"
-            "- Use find_record when you know the exact record key\n"
-            "- Use analyze_gl_variance for period-over-period expense analysis\n"
-            "- Check the infor://reference/business-classes resource for common class names\n"
-            "- Filter syntax uses :: between field and value, | between conditions\n"
-            "- Field names are PascalCase (e.g. InvoiceNumber, VendorName, AccountingUnit)\n"
-            "- Related fields use dot notation (e.g. Vendor.VendorName)\n"
+            "- Use list_ln_services to discover available LN services\n"
+            "- Use get_ln_service_info to understand fields and key requirements\n"
+            "- Use list_ln_records to search and list records (List operations)\n"
+            "- Use show_ln_record when you know the exact record key\n"
+            "- Check infor://reference/ln-services for common service names\n"
+            "- Filters are JSON objects: {\"buyFromSupplierCode\": \"SUPPLIER01\"}\n"
+            "- Key values format: \"orderIdentifier=PO123\" or \"Warehouse=WH01&Item=ITEM01\"\n"
+            "- Phase 1 is read-only — write operations are not available\n"
         ),
     )
 
-    # Validate credentials file exists (warn, don't fail — allows inspection without creds)
     ionapi_path = Path(IONAPI_PATH)
     if not ionapi_path.exists():
         logger.warning(
             f"ION API credentials file not found at: {ionapi_path}\n"
-            "The server will start but tool calls will fail until credentials are configured.\n"
-            "See README.md for setup instructions."
+            "The server will start but tool calls will fail until credentials are configured."
         )
-        # Register tools with a dummy client that will fail gracefully
         _register_with_placeholder(mcp, ionapi_path)
     else:
         try:
+            if not INFOR_ION_TENANT_ID:
+                raise ValueError(
+                    "INFOR_ION_TENANT_ID is not set. "
+                    "Add it to .env (e.g. INFOR_ION_TENANT_ID=YOUR_TENANT_PRD)."
+                )
             auth = IONAuthManager(ionapi_path)
-            client = IONClient(auth, data_area=DATA_AREA)
+            client = LNSoapClient(
+                auth,
+                company=INFOR_LN_COMPANY,
+                tenant_id=INFOR_ION_TENANT_ID,
+                language=INFOR_LN_LANGUAGE,
+            )
             register_query_tools(mcp, client)
-            register_analysis_tools(mcp, client)
             logger.info(
-                f"Configured for tenant: {auth.tenant_id}, "
-                f"data area: {DATA_AREA}, "
+                f"Configured for tenant: {client.tenant_id} (INFOR_ION_TENANT_ID), "
+                f"company: {INFOR_LN_COMPANY}, "
                 f"API base: {auth.base_url}"
             )
         except Exception as e:
-            logger.error(f"Failed to initialize ION API client: {e}")
+            logger.error(f"Failed to initialize LN SOAP client: {e}")
             _register_with_placeholder(mcp, ionapi_path)
 
-    # Resources and prompts don't need live credentials
     register_resources(mcp)
     register_prompts(mcp)
 
@@ -128,61 +105,45 @@ def create_server() -> FastMCP:
 
 
 def _register_with_placeholder(mcp: FastMCP, ionapi_path: Path):
-    """Register a placeholder tool that explains missing credentials."""
+    """Register placeholder tools when credentials are missing."""
+
+    _SETUP_MSG = (
+        f"ERROR: ION API credentials not configured.\n\n"
+        f"Expected credentials file at: {ionapi_path}\n\n"
+        f"To set up:\n"
+        f"1. In Infor OS, go to ION API > Authorized Apps\n"
+        f"2. Create a Backend Service application\n"
+        f"3. Create a service account mapped to an LN user\n"
+        f"4. Download the .ionapi credentials file\n"
+        f"5. Place it at: {ionapi_path}\n"
+        f"6. Set INFOR_ION_TENANT_ID and INFOR_LN_COMPANY in .env\n"
+        f"7. Restart the MCP server"
+    )
 
     @mcp.tool()
-    async def query_business_class(**kwargs) -> str:
-        """Query records from any Infor CloudSuite Landmark business class."""
-        return (
-            f"ERROR: ION API credentials not configured.\n\n"
-            f"Expected credentials file at: {ionapi_path}\n\n"
-            f"To set up:\n"
-            f"1. In Infor OS, go to ION API > Authorized Apps\n"
-            f"2. Create a new Backend Service type application\n"
-            f"3. Create a service account and map it to a CloudSuite user\n"
-            f"4. Download the .ionapi credentials file\n"
-            f"5. Place it at: {ionapi_path}\n"
-            f"6. Restart the MCP server\n\n"
-            f"Or set the IONAPI_PATH environment variable to point to your .ionapi file."
-        )
+    async def list_ln_services(**kwargs) -> str:
+        """List available Infor LN c4ws SOAP services."""
+        return _SETUP_MSG
 
     @mcp.tool()
-    async def find_record(**kwargs) -> str:
-        """Find a specific record by its key field values."""
-        return f"ERROR: ION API credentials not configured. See query_business_class for setup instructions."
+    async def get_ln_service_info(**kwargs) -> str:
+        """Get metadata for an LN service."""
+        return _SETUP_MSG
 
     @mcp.tool()
-    async def list_business_classes(**kwargs) -> str:
-        """Discover available Landmark business classes."""
-        return f"ERROR: ION API credentials not configured. See query_business_class for setup instructions."
+    async def list_ln_records(**kwargs) -> str:
+        """List records from an Infor LN service."""
+        return _SETUP_MSG
 
     @mcp.tool()
-    async def list_business_class_details(**kwargs) -> str:
-        """Get detailed metadata for a specific business class."""
-        return f"ERROR: ION API credentials not configured. See query_business_class for setup instructions."
-
-    @mcp.tool()
-    async def get_field_values(**kwargs) -> str:
-        """Get fields and sample values from a business class set."""
-        return f"ERROR: ION API credentials not configured. See query_business_class for setup instructions."
-
-    @mcp.tool()
-    async def run_form_operation(**kwargs) -> str:
-        """Execute a read-only form operation on a business class."""
-        return f"ERROR: ION API credentials not configured. See query_business_class for setup instructions."
-
-    @mcp.tool()
-    async def analyze_gl_variance(**kwargs) -> str:
-        """Analyze why a GL account balance changed between two periods."""
-        return f"ERROR: ION API credentials not configured. See query_business_class for setup instructions."
+    async def show_ln_record(**kwargs) -> str:
+        """Show a specific LN record by key."""
+        return _SETUP_MSG
 
     logger.warning("Registered placeholder tools (no credentials)")
 
 
-# Create the server instance
 mcp = create_server()
-
-# For uvicorn (HTTP/SSE transport for remote hosting)
 app = mcp.sse_app()
 
 
