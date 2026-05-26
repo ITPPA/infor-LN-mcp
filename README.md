@@ -1,6 +1,6 @@
-# Infor CloudSuite MCP Server
+# Infor LN MCP Server
 
-The first MCP (Model Context Protocol) server for Infor CloudSuite — an AI-powered orchestration layer that gives LLMs structured access to Landmark business class data through the ION API Gateway.
+The first MCP (Model Context Protocol) server for Infor LN — an AI-powered orchestration layer that gives LLMs structured access to Infor LN data through the ION API Gateway.
 
 Ask your ERP questions in plain English. Get answers from live data.
 
