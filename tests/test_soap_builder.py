@@ -80,6 +80,30 @@ class TestShowRequest:
         assert "<DataArea>" in body
 
 
+class TestResolveSelection:
+    def test_purchase_order_line_alias(self):
+        from infor_mcp.services_registry import resolve_selection
+
+        service = get_service("PurchaseOrder_v3")
+        selection = resolve_selection(
+            service,
+            "orderIdentifier,purchaseOrderLine.*",
+        )
+        assert selection == [
+            "PurchaseOrder_v3.orderIdentifier",
+            "PurchaseOrder_v3.Line.*",
+        ]
+
+    def test_purchase_order_qualified_line_alias(self):
+        from infor_mcp.services_registry import resolve_selection
+
+        service = get_service("PurchaseOrder_v3")
+        selection = resolve_selection(
+            service, "PurchaseOrder_v3.purchaseOrderLine.*"
+        )
+        assert selection == ["PurchaseOrder_v3.Line.*"]
+
+
 class TestEnvelope:
     def test_includes_activation_company(self):
         service = get_service("PurchaseOrder_v3")

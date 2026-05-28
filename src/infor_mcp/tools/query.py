@@ -12,7 +12,7 @@ import logging
 from typing import Optional
 
 from infor_mcp.client import LNSoapClient
-from infor_mcp.services_registry import LN_SERVICES, get_service
+from infor_mcp.services_registry import FIELD_ALIASES, LN_SERVICES, get_service
 
 logger = logging.getLogger("infor_mcp.tools.query")
 
@@ -124,6 +124,7 @@ def register_query_tools(mcp, client: LNSoapClient):
             "common_fields": list(svc.common_fields),
             "filterable_fields": list(svc.filterable_fields),
             "filter_operators": ["eq", "ne", "lt", "le", "gt", "ge", "like"],
+            "field_aliases": dict(FIELD_ALIASES.get(svc.name, {})),
             "examples": examples,
         }, indent=2, ensure_ascii=False)
 
@@ -153,7 +154,7 @@ def register_query_tools(mcp, client: LNSoapClient):
                 Use list_ln_services to see all available services.
             fields: Comma-separated field names, or "*" for all fields.
                 Examples: "orderIdentifier,buyFromSupplierCode,status"
-                or "PurchaseOrder_v3.Line.*" for line details.
+                or "PurchaseOrder_v3.Line.*" for line details (not purchaseOrderLine).
             filters: JSON object of field->value filters.
                 Example: '{"buyFromSupplierCode": "POWERSUR"}'
                 Field names can be short (buyFromSupplierCode) or fully qualified
@@ -213,6 +214,7 @@ def register_query_tools(mcp, client: LNSoapClient):
                     Customer360: "CustomerID=CUST001"
                 Use get_ln_service_info to discover required key fields.
             fields: Comma-separated fields to return, or "*" for all.
+                Item_v3 uses List-based key lookup (LN Show SOAP is not reliable).
 
         Returns:
             JSON with the full record details from the LN service.

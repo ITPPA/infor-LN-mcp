@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "defusedxml>=0.7.1",
+    "pytest>=9.0.3",
 ]
 
 [project.optional-dependencies]
@@ -34,3 +35,6 @@ packages = ["src/infor_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: live LN API tests (require INTEGRATION=1 and .ionapi)",
+]

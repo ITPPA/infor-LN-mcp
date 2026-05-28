@@ -123,6 +123,97 @@ def test_list_records_builds_envelope_with_company():
     asyncio.run(run())
 
 
+SOAP_FAULT_NOT_FOUND = """<?xml version="1.0" ?>
+<S:Envelope xmlns:S="http://schemas.xmlsoap.org/soap/envelope/">
+  <S:Body>
+    <S:Fault>
+      <faultcode>S:Server</faultcode>
+      <faultstring>Object not found.</faultstring>
+      <detail>
+        <Result xmlns="http://www.infor.com/businessinterface/Item_v3">
+          <messageCode>tlbctsb0026</messageCode>
+          <messageType>Error</messageType>
+          <messageText>Object not found.</messageText>
+          <messageSource>Public Layer</messageSource>
+        </Result>
+      </detail>
+    </S:Fault>
+  </S:Body>
+</S:Envelope>
+"""
+
+
+def test_soap_fault_500_returns_json_without_retry():
+    client = _make_client()
+    mock_response = httpx.Response(
+        500,
+        text=SOAP_FAULT_NOT_FOUND,
+        request=httpx.Request("POST", "http://test"),
+    )
+
+    async def run():
+        with patch.object(client, "_get_http") as mock_get_http:
+            mock_http = AsyncMock()
+            mock_http.post = AsyncMock(return_value=mock_response)
+            mock_get_http.return_value = mock_http
+
+            result = await client.call_operation("Item_v3", "<xml/>")
+            parsed = json.loads(result)
+
+            assert mock_http.post.call_count == 1
+            assert parsed["error"] is True
+            assert parsed["status"] == 500
+            assert parsed["message"] == "Object not found."
+            assert parsed["messageCode"] == "tlbctsb0026"
+            assert "not found" in parsed["hint"].lower()
+
+    asyncio.run(run())
+
+
+def test_item_v3_show_uses_list_only():
+    """Item_v3 show_record must not POST Show SOAP — only List."""
+    client = _make_client()
+    list_ok = httpx.Response(
+        200,
+        text="""<?xml version="1.0"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <ListResponse>
+      <DataArea>
+        <Item_v3>
+          <itemCode>XALK01</itemCode>
+          <description>Test item</description>
+        </Item_v3>
+      </DataArea>
+    </ListResponse>
+  </soapenv:Body>
+</soapenv:Envelope>""",
+        request=httpx.Request("POST", "http://test"),
+    )
+
+    async def run():
+        with patch.object(client, "_get_http") as mock_get_http:
+            mock_http = AsyncMock()
+            mock_http.post = AsyncMock(return_value=list_ok)
+            mock_get_http.return_value = mock_http
+
+            result = await client.show_record(
+                "Item_v3", {"itemCode": "XALK01"}, fields="itemCode,description"
+            )
+            parsed = json.loads(result)
+            assert parsed["ShowResponse"]["DataArea"]["Item_v3"]["itemCode"] == "XALK01"
+            assert "_show_fallback" not in parsed
+            assert mock_http.post.call_count == 1
+            posted = mock_http.post.call_args[1]["content"]
+            if isinstance(posted, bytes):
+                posted = posted.decode()
+            assert "<bo:List>" in posted
+            assert "<bo:Show>" not in posted
+            assert "%XALK01%" in posted
+
+    asyncio.run(run())
+
+
 def test_http_error_returns_json():
     client = _make_client()
     mock_response = httpx.Response(

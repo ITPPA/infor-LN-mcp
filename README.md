@@ -2,6 +2,8 @@
 
 MCP (Model Context Protocol) server for **Infor LN** — an AI orchestration layer that gives LLMs structured, read-only access to LN data through the ION API Gateway and c4ws SOAP Web Services.
 
+Ask your ERP questions in plain language. Get answers from live LN data.
+
 > **Public repository** — never commit credentials (`.ionapi`, `.env`). Use `.env.example` as a template only.
 
 ## What This Does
@@ -17,31 +19,56 @@ Connect an MCP-compatible AI client (Claude, AnythingLLM, etc.) to your Infor LN
 ## Prerequisites
 
 - Python 3.11+
-- Infor LN with ION API Gateway (c4ws services enabled)
+- Access to an Infor LN environment with ION API Gateway
 - ION API **Backend Service** app + `.ionapi` credentials file
 - LN service account with read-only access (recommended for Phase 1)
+
+### Configure ION API Credentials
+
+#### Step A: Create the Authorized App
+
+1. Log into your Infor CloudSuite environment
+2. Navigate to **Infor OS > ION API** (or search for "ION API" in the hamburger menu)
+3. Go to **Authorized Apps**
+4. Click + Add (or "Create New")
+5. Configure:
+    Name: InforMCP (or any descriptive name)
+    Type: Backend Service
+    Description: "MCP Server for AI-powered LN access"
+6. Save the application
+
+#### Step B: Download Credentials
+
+1. In your Authorized App, click Download Credentials
+2. Select Service Accounts
+3. Map it to a CloudSuite user — this user determines what the MCP server can access
+  - For Phase 1 (read-only), map to a user with inquiry-level access
+  - The user should have access to the financial modules you want to query
+  - **Do NOT map to an admin account** — use least-privilege
+
+This downloads a .ionapi file (JSON format)
+Place it at config/.ionapi in the project directory
 
 ---
 
 ## Production deployment
 
-### 1. Install on the server
+### 1. Install standalone on node server
+
+#### Clone the repo
 
 ```bash
-git clone https://github.com/YOUR_ORG/infor-LN-mcp.git /opt/infor-LN-mcp
+git clone https://github.com/ITPPA/infor-LN-mcp.git /opt/infor-LN-mcp
 cd /opt/infor-LN-mcp
 
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
 
-Use `pip install -e .` in production (no dev dependencies).
-
-### 2. Configure credentials and environment
+### 2. Set Environment Variables
 
 ```bash
-mkdir -p config
+mkdir -p /opt/infor-LN-mcp/config
 cp /secure/path/to/credentials.ionapi config/.ionapi
 
 cp .env.example .env
@@ -91,14 +118,14 @@ On startup, logs should show:
 Configured for tenant: YOUR_TENANT_ID (INFOR_ION_TENANT_ID), company: 100, ...
 ```
 
-### 4. Production — AnythingLLM (Docker)
+### Install and run With AnythingLLM (Docker)
 
 > Self-hosted only — see [AnythingLLM MCP on Docker](https://docs.anythingllm.com/mcp-compatibility/docker).
 
 **Deploy the project** (mount at a fixed path or inside storage):
 
 ```bash
-git clone https://github.com/YOUR_ORG/infor-LN-mcp.git /opt/infor-LN-mcp
+git clone https://github.com/ITPPA/infor-LN-mcp.git /opt/infor-LN-mcp
 mkdir -p /opt/infor-LN-mcp/config
 cp /secure/path/to/credentials.ionapi /opt/infor-LN-mcp/config/.ionapi
 ```
@@ -122,16 +149,13 @@ services:
 {
   "mcpServers": {
     "infor-ln": {
-      "command": "uv",
-      "args": ["run", "infor-mcp"],
+      "command": "uvx",
+      "args": ["infor-mcp"],
       "cwd": "/app/infor-LN-mcp",
       "env": {
         "IONAPI_PATH": "/app/infor-LN-mcp/config/.ionapi",
         "INFOR_ION_TENANT_ID": "YOUR_TENANT_ID",
         "INFOR_LN_COMPANY": "100"
-      },
-      "anythingllm": {
-        "suppressedTools": []
       }
     }
   }
@@ -144,6 +168,9 @@ AnythingLLM Docker includes **`uv`** for Python MCP servers — no manual venv n
 
 ```bash
 docker exec -it <anythingllm-container> uv sync --directory /app/infor-LN-mcp
+> ou
+docker exec -it <anythingllm-container> /bin/bash
+anythingllm@<anythingllm-container>: uv tool install -e /app/infor-LN-mcp
 ```
 
 **Verify:** open **Agent Skills** in AnythingLLM → `infor-ln` should be **running** with 4 tools → use `@agent` in chat.
@@ -159,7 +186,9 @@ docker exec -it <anythingllm-container> uv sync --directory /app/infor-LN-mcp
 | Slow first start | Run `uv sync --directory /app/infor-LN-mcp` in the container |
 | Tools not invoked | Use `@agent` and a capable LLM model |
 
-### 5. Production — Claude Desktop
+
+### Run with Claude Desktop
+
 
 Add to `claude_desktop_config.json`:
 
@@ -189,7 +218,7 @@ Use this workflow on a **dev/sandbox LN environment** — not production data.
 ### Local setup
 
 ```bash
-git clone https://github.com/YOUR_ORG/infor-LN-mcp.git
+git clone https://github.com/ITPPA/infor-LN-mcp.git
 cd infor-LN-mcp
 
 python3 -m venv .venv
@@ -201,8 +230,6 @@ cp .env.example .env
 mkdir -p config && cp ~/sandbox/.ionapi config/.ionapi
 ```
 
-> Use `/usr/bin/python3 -m venv .venv` if your IDE links `python3` to Cursor AppImage.
-
 ### Unit tests (no LN connection required)
 
 ```bash
@@ -210,7 +237,16 @@ source .venv/bin/activate
 pytest -v
 ```
 
-11 tests cover SOAP envelope building and the HTTP client (mocked). No `.ionapi` needed.
+Unit tests cover SOAP envelope building and the HTTP client (mocked). No `.ionapi` needed.
+
+### Integration tests (live LN API)
+
+Requires `.env`, `config/.ionapi`, and data in your tenant.
+
+```bash
+source .venv/bin/activate
+INTEGRATION=1 pytest tests/test_api.py -v
+```
 
 ### Interactive test — MCP Inspector
 
@@ -248,7 +284,7 @@ Ensure `INFOR_ION_TENANT_ID` and `INFOR_LN_COMPANY` are set in the environment o
 
 | Tool | Description |
 |------|-------------|
-| `list_ln_services` | Discover available LN c4ws SOAP services |
+| `list_ln_services` | Discover available LN SOAP services |
 | `get_ln_service_info` | Metadata, key fields, filter examples |
 | `list_ln_records` | List/search records (List operations) |
 | `show_ln_record` | Show a record by key field(s) |
@@ -336,7 +372,7 @@ infor-LN-mcp/
 
 ## Roadmap
 
-- **Phase 1** (current): Read-only List/Show on 10 c4ws services
+- **Phase 1** (current): Read-only List/Show on services
 - **Phase 2**: Write operations with confirmation gates
 - **Phase 3**: Agentic multi-step workflows
 

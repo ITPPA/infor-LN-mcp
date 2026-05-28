@@ -7,7 +7,9 @@ Derived from DOCS_API/ WSDL files.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
+
+ShowStrategy = Literal["soap", "list_like_keys"]
 
 
 WRITE_OPERATIONS = frozenset({
@@ -48,6 +50,24 @@ class LNServiceInfo:
     common_fields: tuple[str, ...] = ()
     filterable_fields: tuple[str, ...] = ()
     supports_list: bool = True
+    # Item_v3: LN c4ws Show SOAP returns "Object not found" for valid items;
+    # List with like %key% is the supported lookup path on this interface.
+    show_strategy: ShowStrategy = "soap"
+    # When True, eq filters on key_fields are sent as like %value% (LN tcitem quirk).
+    list_key_eq_as_like: bool = False
+
+
+# LLM / API guesses → LN selectionAttribute names (WSDL / Public Layer).
+FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "PurchaseOrder_v3": {
+        "purchaseOrderLine": "Line",
+        "PurchaseOrderLine": "Line",
+        "purchaseOrderLines": "Line",
+        "PurchaseOrderLines": "Line",
+        "lines": "Line",
+        "line": "Line",
+    },
+}
 
 
 LN_SERVICES: dict[str, LNServiceInfo] = {
@@ -106,6 +126,8 @@ LN_SERVICES: dict[str, LNServiceInfo] = {
         key_fields=("itemCode",),
         common_fields=("itemCode", "description", "itemGroup", "itemType", "baseUOM"),
         filterable_fields=("itemCode", "itemGroup", "itemType", "generalSearchKey1"),
+        show_strategy="list_like_keys",
+        list_key_eq_as_like=True,
     ),
     "SalesOrder": LNServiceInfo(
         name="SalesOrder",
@@ -145,7 +167,7 @@ LN_SERVICES: dict[str, LNServiceInfo] = {
         list_operation="List",
         list_request_element="ListRequest",
         key_fields=("warehouse",),
-        common_fields=("warehouse", "description"),
+        common_fields=("warehouse", "warehouseDescription"),
         filterable_fields=("warehouse",),
     ),
     "WarehouseItemInventory": LNServiceInfo(
@@ -192,12 +214,35 @@ def get_service(name: str) -> LNServiceInfo:
 
 def qualify_field(service: LNServiceInfo, field_name: str) -> str:
     """Ensure a field name is fully qualified with the entity prefix."""
-    field_name = field_name.strip()
+    field_name = normalize_field_alias(service, field_name.strip())
     if not field_name or field_name == "*":
         return "*"
     if field_name.startswith(f"{service.entity}."):
         return field_name
     return f"{service.entity}.{field_name}"
+
+
+def normalize_field_alias(service: LNServiceInfo, field_name: str) -> str:
+    """Map common aliases to LN-valid selectionAttribute short names."""
+    if not field_name or field_name in ("*", "_all", "all"):
+        return field_name
+
+    aliases = FIELD_ALIASES.get(service.name, {})
+    if not aliases:
+        return field_name
+
+    entity_prefix = f"{service.entity}."
+    raw = field_name
+    if raw.startswith(entity_prefix):
+        raw = raw[len(entity_prefix):]
+
+    wildcard = raw.endswith(".*")
+    base = raw[:-2] if wildcard else raw
+    mapped = aliases.get(base, base)
+    result = f"{mapped}.*" if wildcard else mapped
+    if field_name.startswith(entity_prefix):
+        return f"{entity_prefix}{result}"
+    return result
 
 
 def resolve_selection(service: LNServiceInfo, fields: str) -> list[str]:
@@ -211,3 +256,25 @@ def resolve_selection(service: LNServiceInfo, fields: str) -> list[str]:
         if name:
             selection.append(qualify_field(service, name))
     return selection or [f"{service.entity}.*"]
+
+
+def normalize_list_key_filter(
+    service: LNServiceInfo,
+    field_name: str,
+    value: str,
+    filter_operator: str,
+) -> tuple[str, str]:
+    """
+    Apply service-specific filter rules for LN key lookups.
+
+    Item_v3 itemCode ignores eq; only like %value% matches (tcitem / Public Layer).
+    """
+    short_name = field_name.split(".")[-1]
+    if (
+        service.list_key_eq_as_like
+        and filter_operator == "eq"
+        and short_name in service.key_fields
+        and "%" not in value
+    ):
+        return "like", f"%{value.strip()}%"
+    return filter_operator, value
